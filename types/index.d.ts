@@ -6,6 +6,7 @@ export type Chat = {
   updatedAt: string
   note?: string
   unread?: boolean
+  where: 'nuvem' | 'pc' | 'outro'
 }
 
 export type Art = { url: string; title: string; updated: string }
@@ -23,6 +24,7 @@ declare module 'claude-code' {
       status: Shaped<string>
       links: Shaped<Record<string, string[]>>
       pics: Shaped<number>
+      filter: Shaped<string>
     }
   }
 }

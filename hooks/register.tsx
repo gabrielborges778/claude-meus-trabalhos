@@ -9,7 +9,7 @@ const SERVER = 'claude-code-remote'
 const SCAN_CHATS = 25
 const SCAN_PAGES = 4
 
-const chats = atom({ plugin: 'meus-trabalhos', key: 'chats' } as const, [] as Chat[], { shape: 'chats-1' })
+const chats = atom({ plugin: 'meus-trabalhos', key: 'chats' } as const, [] as Chat[], { shape: 'chats-2' })
 const arts = atom({ plugin: 'meus-trabalhos', key: 'arts' } as const, [] as Art[], { shape: 'arts-1' })
 const saved = atom({ plugin: 'meus-trabalhos', key: 'saved' } as const, [] as Saved[], { shape: 'saved-1' })
 const hidden = atom({ plugin: 'meus-trabalhos', key: 'hidden' } as const, [] as string[], { shape: 'hidden-1' })
@@ -19,6 +19,8 @@ const status = atom({ plugin: 'meus-trabalhos', key: 'status' } as const, '', { 
 const links = atom({ plugin: 'meus-trabalhos', key: 'links' } as const, {} as Record<string, string[]>, { shape: 'links-1' })
 // muda sempre que uma miniatura nova fica pronta, para redesenhar
 const pics = atom({ plugin: 'meus-trabalhos', key: 'pics' } as const, 0, { shape: 'pics-1' })
+// 'todos' | 'nuvem' | 'pc'
+const filter = atom({ plugin: 'meus-trabalhos', key: 'filter' } as const, 'todos', { shape: 'filter-1' })
 
 // miniaturas em memória: id do artefato -> JPEG em base64
 const images = new Map<string, string>()
@@ -49,6 +51,7 @@ function parseChats(text: string): Chat[] {
     updatedAt: String(r.updated_at ?? ''),
     note: r.post_turn_summary?.needs_action ?? r.post_turn_summary?.recent_action ?? undefined,
     unread: Boolean(r.unread),
+    where: r.environment_kind === 'anthropic_cloud' ? 'nuvem' : r.environment_kind === 'bridge' ? 'pc' : 'outro',
   }))
 }
 
@@ -162,7 +165,7 @@ async function scanAll($: Engine, list: Chat[], artList: Art[]) {
   try {
     const mine = await read($, saved)
     const targets = [
-      ...mine.map(s => list.find(c => c.id === s.id) ?? ({ id: s.id, title: s.title, bucket: '', archived: false, updatedAt: '' } as Chat)),
+      ...mine.map(s => list.find(c => c.id === s.id) ?? ({ id: s.id, title: s.title, bucket: '', archived: false, updatedAt: '', where: 'outro' } as Chat)),
       ...list.filter(c => !mine.some(s => s.id === c.id)).slice(0, SCAN_CHATS),
     ]
     for (const c of targets) {
@@ -202,6 +205,11 @@ async function showAllArts($: Engine) {
   await $.store.set('hidden', [])
 }
 
+async function setFilter($: Engine, value: string) {
+  await update($, filter, () => value)
+  await $.store.set('filter', value)
+}
+
 async function openPane($: Engine) {
   await $.ui.open({ id: PANE, title: TITLE, focus: true })
   await refresh($)
@@ -213,6 +221,8 @@ export const register: Register = on => {
     if (Array.isArray(s)) await update($, saved, () => s as Saved[])
     const h = await $.store.get('hidden')
     if (Array.isArray(h)) await update($, hidden, () => h.map(String))
+    const f = await $.store.get('filter')
+    if (typeof f === 'string') await update($, filter, () => f)
     await $.command.register({ name: 'trabalhos', description: 'Abre o painel Meus Trabalhos' })
     await $.command.register({ name: 'chats', description: 'Abre o painel Meus Trabalhos' })
     void refresh($)
@@ -245,7 +255,9 @@ export const register: Register = on => {
     const { Box, Text, Button, Link } = $.ui.resolve(e)
     const els = $.ui.resolve(e) as unknown as Record<string, any>
     const Svg = els.Svg
-    const list = await read($, chats)
+    const all = await read($, chats)
+    const where = await read($, filter)
+    const list = where === 'todos' ? all : all.filter(c => c.where === where)
     const mine = await read($, saved)
     const artList = await read($, arts)
     const hiddenList = await read($, hidden)
@@ -282,13 +294,15 @@ export const register: Register = on => {
       </Box>
     )
 
+    const placeOf = (live?: Chat) => (live?.where === 'nuvem' ? '☁️ Nuvem' : live?.where === 'pc' ? '💻 Meu PC' : '')
     const stateOf = (live?: Chat) =>
-      live?.bucket === 'WORKING' ? '⚙️ em andamento' :
+      `${placeOf(live)}${placeOf(live) ? ' · ' : ''}` +
+      (live?.bucket === 'WORKING' ? '⚙️ em andamento' :
       live?.bucket === 'BLOCKED' || live?.bucket === 'REVIEW_READY' ? '⏳ aguardando você' :
-      live?.bucket === 'FAILED' ? '❗ erro' : '💬 chat'
+      live?.bucket === 'FAILED' ? '❗ erro' : '💬 chat')
 
-    const chatCards = mine.map(s => {
-      const live = list.find(c => c.id === s.id)
+    const chatCards = mine.filter(s => where === 'todos' || all.find(c => c.id === s.id)?.where === where).map(s => {
+      const live = all.find(c => c.id === s.id)
       return card(`c-${s.id}`, stateOf(live), live?.title ?? s.title, chatUrl(s.id), live ? ago(live.updatedAt, now) : '', live?.note, linkMap[s.id]?.[0],
         <Button key={`rm-${s.id}`} label="Remover" onPress={() => removeChat($, s.id)} />)
     })
@@ -313,6 +327,12 @@ export const register: Register = on => {
           <Button key="pick" label={isPicking ? 'Fechar lista' : '+ Incluir chat'} hotkey="i" onPress={() => update($, picking, v => !v)} />
           <Text dimColor>{line}</Text>
         </Box>
+        <Box flexDirection="row" gap={1} marginTop={1}>
+          <Text dimColor>Mostrar:</Text>
+          <Button key="f-todos" label={`${where === 'todos' ? '● ' : ''}Todos (${all.length})`} onPress={() => setFilter($, 'todos')} />
+          <Button key="f-nuvem" label={`${where === 'nuvem' ? '● ' : ''}☁️ Nuvem (${all.filter(c => c.where === 'nuvem').length})`} onPress={() => setFilter($, 'nuvem')} />
+          <Button key="f-pc" label={`${where === 'pc' ? '● ' : ''}💻 Meu PC (${all.filter(c => c.where === 'pc').length})`} onPress={() => setFilter($, 'pc')} />
+        </Box>
 
         {isPicking && (
           <Box flexDirection="column" marginTop={1} borderStyle="single" paddingX={1}>
@@ -322,7 +342,7 @@ export const register: Register = on => {
               <Box key={`p-${c.id}`} flexDirection="row" gap={1}>
                 <Button key={`add-${c.id}`} label="+ Incluir" onPress={() => include($, c)} />
                 <Text>{c.title}</Text>
-                <Text dimColor>{ago(c.updatedAt, now)}</Text>
+                <Text dimColor>{placeOf(c)} {ago(c.updatedAt, now)}</Text>
               </Box>
             ))}
           </Box>

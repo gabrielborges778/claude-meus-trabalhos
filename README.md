@@ -5,6 +5,7 @@ Painel para o Claude Code que organiza suas conversas em cards. Um botão **🗂
 - **Chats incluídos:** as conversas que você escolhe com "+ Incluir chat".
 - **Conversas com artefatos:** conversas em que um artefato foi criado ou citado, com uma miniatura dele.
 - **Outros artefatos:** artefatos que não foram ligados a nenhuma conversa.
+- Filtros **☁️ Nuvem** e **💻 Meu PC** separam as conversas da nuvem das que rodam no seu computador.
 
 Cada card tem os links **💬 Abrir conversa** e **🌐 Abrir artefato no navegador**. Também abre com `/trabalhos`.
 
