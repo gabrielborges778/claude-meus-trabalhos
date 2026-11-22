@@ -1,1 +1,1 @@
-{ "name": "meus-trabalhos", "version": "0.4.0", "description": "Meus Trabalhos: cards com os chats que você inclui e os seus artefatos, abertos por um botão acima da caixa de texto", "types": "./types/index.d.ts" }
+{ "name": "meus-trabalhos", "version": "0.5.0", "description": "Meus Trabalhos: cards com os chats que você inclui e os seus artefatos, abertos por um botão acima da caixa de texto", "types": "./types/index.d.ts" }

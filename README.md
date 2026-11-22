@@ -6,6 +6,7 @@ Painel para o Claude Code que organiza suas conversas em cards. Um botão **🗂
 - **Conversas com artefatos:** conversas em que um artefato foi criado ou citado, com uma miniatura dele.
 - **Outros artefatos:** artefatos que não foram ligados a nenhuma conversa.
 - Filtros **☁️ Nuvem** e **💻 Meu PC** separam as conversas da nuvem das que rodam no seu computador.
+- As miniaturas são geradas uma única vez e guardadas na pasta "Meus Trabalhos — miniaturas" do seu Google Drive (precisa do conector Google Drive ligado).
 
 Cada card tem os links **💬 Abrir conversa** e **🌐 Abrir artefato no navegador**. Também abre com `/trabalhos`.
 

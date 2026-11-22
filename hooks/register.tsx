@@ -102,31 +102,121 @@ async function scanChat($: Engine, c: Chat): Promise<string[]> {
   return found.slice(0, 5)
 }
 
-// Gera (ou lê do disco) a miniatura PNG de um artefato
-async function ensureThumb($: Engine, url: string, updated: string): Promise<void> {
+// ---- Google Drive: guarda as miniaturas para sempre ----
+const DRIVE_NAMES = ['Google_Drive', 'Google Drive', 'claude.ai Google Drive']
+const FOLDER = 'Meus Trabalhos — miniaturas'
+let driveFiles: Map<string, string> | null = null // nome do arquivo -> id no Drive
+let driveFolder: string | null = null
+
+async function driveCall($: Engine, tool: string, args: Record<string, unknown>): Promise<any> {
+  const known = (await $.store.get('driveServer')) as string | undefined
+  const names = known ? [known, ...DRIVE_NAMES.filter(n => n !== known)] : DRIVE_NAMES
+  let last: unknown
+  for (const name of names) {
+    try {
+      const res = await $.mcp.call(name, tool, args)
+      if (res.isError) throw new Error(textOf(res).slice(0, 120))
+      if (name !== known) await $.store.set('driveServer', name)
+      const text = textOf(res)
+      try { return JSON.parse(text) } catch { return { raw: text } }
+    } catch (err) {
+      last = err
+    }
+  }
+  throw last ?? new Error('Google Drive indisponível')
+}
+
+async function driveIndex($: Engine): Promise<Map<string, string>> {
+  if (driveFiles) return driveFiles
+  const found = await driveCall($, 'search_files', {
+    query: `title = '${FOLDER}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+    excludeContentSnippets: true,
+    pageSize: 5,
+  })
+  driveFolder = found?.files?.[0]?.id ?? null
+  if (!driveFolder) {
+    const made = await driveCall($, 'create_file', { title: FOLDER, contentMimeType: 'application/vnd.google-apps.folder' })
+    driveFolder = made?.id ?? made?.file?.id ?? null
+  }
+  const map = new Map<string, string>()
+  if (driveFolder) {
+    let token: string | undefined
+    for (let i = 0; i < 10; i++) {
+      const args: Record<string, unknown> = { query: `parentId = '${driveFolder}' and trashed = false`, excludeContentSnippets: true, pageSize: 100 }
+      if (token) args.pageToken = token
+      const page = await driveCall($, 'search_files', args)
+      for (const f of page?.files ?? []) if (f?.title && f?.id && !map.has(f.title)) map.set(String(f.title), String(f.id))
+      token = page?.nextPageToken
+      if (!token || !(page?.files?.length)) break
+    }
+  }
+  driveFiles = map
+  return map
+}
+
+function pickBase64(obj: any): string | undefined {
+  if (!obj) return undefined
+  if (typeof obj === 'string') return /^[A-Za-z0-9+/=\s]{200,}$/.test(obj) ? obj.replace(/\s+/g, '') : undefined
+  for (const k of ['content', 'data', 'base64Content', 'base64', 'raw']) {
+    const v = pickBase64(obj[k])
+    if (v) return v
+  }
+  if (typeof obj === 'object') for (const v of Object.values(obj)) { const b = pickBase64(v); if (b) return b }
+  return undefined
+}
+
+async function saveToDrive($: Engine, index: Map<string, string>, name: string, base64: string) {
+  try {
+    const made = await driveCall($, 'create_file', {
+      title: name, parentId: driveFolder, base64Content: base64,
+      contentMimeType: 'image/jpeg', disableConversionToGoogleType: true,
+    })
+    index.set(name, String(made?.id ?? made?.file?.id ?? 'ok'))
+  } catch {
+    // sem Drive: a miniatura continua só neste computador
+  }
+}
+
+// Miniatura de um artefato: memória -> disco -> Google Drive -> gera uma única vez
+async function ensureThumb($: Engine, url: string): Promise<void> {
   const id = artId(url)
   if (!id || images.has(id) || failed.has(id)) return
   const dir = `${$.plugin.root}/thumbs`
   const jpg = `${dir}/${id}.jpg`
-  const meta = ((await $.store.get('thumbMeta')) ?? {}) as Record<string, string>
-  const fresh = (await $.fs.exists(jpg)) && (!updated || meta[id] === updated)
+  const name = `${id}.jpg`
   try {
-    if (!fresh) {
-      const res: any = await $.tool.call({ tool: 'Artifact', action: 'read', url } as any)
-      const text = textOf(res)
-      const lo = text.search(/<!doctype html|<html/i)
-      const hi = text.toLowerCase().lastIndexOf('</html>')
-      if (lo < 0 || hi < lo) throw new Error('sem HTML')
-      const htmlPath = `${dir}/${id}.html`
-      await $.fs.write(htmlPath, text.slice(lo, hi + 7))
-      const run = await $.process.run(['node', `${$.plugin.root}/scripts/thumb.cjs`, htmlPath, jpg], { timeoutMs: 60000 })
-      if (run.exitCode !== 0) throw new Error('captura falhou')
-      meta[id] = updated
-      await $.store.set('thumbMeta', meta)
+    let index: Map<string, string> | null = null
+    try { index = await driveIndex($) } catch { index = null }
+    if (await $.fs.exists(jpg)) {
+      const { base64 } = (await $.fs.read(jpg, { as: 'bytes' })) as { base64: string }
+      images.set(id, base64)
+      await update($, pics, n => n + 1)
+      if (index && driveFolder && !index.has(name)) await saveToDrive($, index, name, base64)
+      return
     }
+    const fileId = index?.get(name)
+    if (fileId) {
+      const b64 = pickBase64(await driveCall($, 'download_file_content', { fileId }))
+      if (b64) {
+        images.set(id, b64)
+        await update($, pics, n => n + 1)
+        return
+      }
+    }
+    // Ainda não existe em lugar nenhum: gera agora, uma única vez
+    const res: any = await $.tool.call({ tool: 'Artifact', action: 'read', url } as any)
+    const text = textOf(res)
+    const lo = text.search(/<!doctype html|<html/i)
+    const hi = text.toLowerCase().lastIndexOf('</html>')
+    if (lo < 0 || hi < lo) throw new Error('sem HTML')
+    const htmlPath = `${dir}/${id}.html`
+    await $.fs.write(htmlPath, text.slice(lo, hi + 7))
+    const run = await $.process.run(['node', `${$.plugin.root}/scripts/thumb.cjs`, htmlPath, jpg], { timeoutMs: 60000 })
+    if (run.exitCode !== 0) throw new Error('captura falhou')
     const { base64 } = (await $.fs.read(jpg, { as: 'bytes' })) as { base64: string }
     images.set(id, base64)
     await update($, pics, n => n + 1)
+    if (index && driveFolder && !index.has(name)) await saveToDrive($, index, name, base64)
   } catch {
     failed.add(id)
   }
@@ -176,10 +266,7 @@ async function scanAll($: Engine, list: Chat[], artList: Art[]) {
     const wanted = new Map<string, string>()
     for (const urls of Object.values(linkMap)) if (urls[0]) wanted.set(urls[0], '')
     for (const a of artList) wanted.set(a.url, a.updated)
-    for (const [url, upd] of wanted) {
-      const known = artList.find(a => artId(a.url) === artId(url))
-      await ensureThumb($, url, known?.updated ?? upd)
-    }
+    for (const url of wanted.keys()) await ensureThumb($, url)
   } finally {
     busy = false
   }
