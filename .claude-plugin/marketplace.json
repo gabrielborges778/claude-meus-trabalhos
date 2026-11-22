@@ -1,0 +1,5 @@
+{
+  "name": "claude-meus-trabalhos",
+  "owner": { "name": "gabrielborges778" },
+  "plugins": [{ "name": "meus-trabalhos", "source": "./" }]
+}
